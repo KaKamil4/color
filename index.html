@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Color"><meta name="theme-color" content="#eeeeee">
+<link rel="manifest" href="manifest.json"><link rel="apple-touch-icon" href="icon-180.png">
+<title>Color</title>
+<style>
+:root{--bg:#eeeeee;--ink:#1a1a1a;--soft:rgba(26,26,26,.6);--panel:rgba(26,26,26,.09)}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:var(--bg);color:var(--ink);font-family:-apple-system,"SF Pro Display","Helvetica Neue",Arial,sans-serif;-webkit-user-select:none;user-select:none;overscroll-behavior:none}
+body{display:flex;flex-direction:column;gap:14px;overflow-y:auto;padding:calc(env(safe-area-inset-top,0px) + 16px) 20px calc(env(safe-area-inset-bottom,0px) + 16px)}
+button{border:0;border-radius:14px;background:var(--ink);color:var(--bg);font-family:inherit;font-size:1.15rem;font-weight:700;padding:16px;width:100%}
+button:active{opacity:.8}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.mini{width:auto;padding:8px 12px;font-size:.9rem;background:var(--panel);color:var(--ink);border-radius:10px}
+.st{color:var(--soft);font-size:.95rem;min-height:1.4em}
+.row{display:flex;justify-content:space-between;gap:10px;font-size:.9rem;color:var(--soft);font-variant-numeric:tabular-nums}
+.row b{display:block;font-size:1.45rem;color:var(--ink);font-weight:700}
+
+.cam{position:relative;border-radius:14px;overflow:hidden;background:var(--panel);aspect-ratio:4/3;flex:none}
+#vid{width:100%;height:100%;object-fit:cover}
+.cross{position:absolute;left:50%;top:50%;width:34px;height:34px;margin:-17px 0 0 -17px;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 2px #000}
+#cswatch{height:80px;border-radius:14px;border:3px solid var(--ink);background:#000;flex:none}
+#cvals{font-size:1.15rem;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.5}
+.sw{display:flex;flex-wrap:wrap;gap:8px}
+.sw button{width:48px;height:48px;padding:0;border:3px solid var(--ink);border-radius:12px}
+
+</style></head><body>
+
+<div class="st" id="st">Starting camera…</div>
+<div class="cam" id="cam"><video id="vid" playsinline muted></video><div class="cross"></div></div>
+<div id="cswatch"></div>
+<div id="cvals">–</div>
+<button id="csave">Save color</button>
+<div class="sw" id="csaved"></div>
+<div class="st">Tap the big swatch or a saved color to copy its hex code.</div>
+<script>
+(() => {
+const $ = id => document.getElementById(id), fmt = v => v.toFixed(2), rad = d => d * Math.PI / 180, p2 = n => String(n).padStart(2, '0');
+let wake = null, want = false;
+async function acquire() { if (!want || wake) return; try { wake = await navigator.wakeLock.request('screen'); wake.onrelease = () => { wake = null; }; } catch (e) {} }
+function keepAwake(on) { want = on; if (on) acquire(); else if (wake) { wake.release().catch(() => {}); wake = null; } }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') acquire(); });
+const hav = (a, b) => { const R = 6371000, dl = rad(b.la - a.la), dn = rad(b.lo - a.lo), h = Math.sin(dl/2)**2 + Math.cos(rad(a.la))*Math.cos(rad(b.la))*Math.sin(dn/2)**2; return 2*R*Math.asin(Math.sqrt(h)); };
+const GPSERR = { 1: 'Location is blocked. Allow it in Settings > Privacy > Location Services > Safari Websites.', 2: 'No GPS signal. Move to an open area.', 3: 'GPS is taking too long. Keep waiting.' };
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+
+const st = m => $('st').textContent = m;
+const vid = $('vid'), sc = document.createElement('canvas'); sc.width = sc.height = 9;
+const sx = sc.getContext('2d', { willReadFrequently: true });
+let stream = null, samp = null, col = null, colors = store.get('colors', []);
+async function camStart() {
+  if (stream) return;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    vid.srcObject = stream; await vid.play(); keepAwake(true); samp = setInterval(sample, 120); st('Point the circle at something.'); }
+  catch (e) { stream = null; st('Camera blocked. Allow it in Settings > Apps > Safari > Camera, then tap the preview.'); }
+}
+function camStop() { clearInterval(samp); if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } vid.srcObject = null; keepAwake(false); }
+function sample() {
+  const w = vid.videoWidth, h = vid.videoHeight; if (!w) return; const s = Math.min(w, h) * .04;
+  sx.drawImage(vid, (w - s) / 2, (h - s) / 2, s, s, 0, 0, 9, 9);
+  const d = sx.getImageData(0, 0, 9, 9).data; let r = 0, g = 0, b = 0; const n = d.length / 4;
+  for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i+1]; b += d[i+2]; }
+  r = Math.round(r/n); g = Math.round(g/n); b = Math.round(b/n);
+  const hex = '#' + [r, g, b].map(v => p2(v.toString(16))).join('').toUpperCase();
+  const R = r/255, G = g/255, B = b/255, mx = Math.max(R, G, B), mn = Math.min(R, G, B), l = (mx + mn) / 2, dd = mx - mn;
+  let H = 0, S = 0;
+  if (dd) { S = dd / (1 - Math.abs(2*l - 1)); H = mx === R ? ((G - B) / dd) % 6 : mx === G ? (B - R) / dd + 2 : (R - G) / dd + 4; H = (H * 60 + 360) % 360; }
+  col = hex; $('cswatch').style.background = hex;
+  $('cvals').innerHTML = `${hex}<br>rgb(${r}, ${g}, ${b})<br>hsl(${Math.round(H)}, ${Math.round(S*100)}%, ${Math.round(l*100)}%)`;
+}
+function copy(hex) { (navigator.clipboard ? navigator.clipboard.writeText(hex) : Promise.reject()).then(() => st('Copied ' + hex), () => st(hex)); }
+function renderColors() { $('csaved').innerHTML = colors.map(c => `<button style="background:${c}" data-c="${c}" aria-label="${c}"></button>`).join(''); }
+$('csave').onclick = () => { if (!col) return; colors = [col, ...colors.filter(c => c !== col)].slice(0, 16); store.set('colors', colors); renderColors(); };
+$('csaved').onclick = e => { const b = e.target.closest('button'); if (b) copy(b.dataset.c); };
+$('cswatch').onclick = () => col && copy(col);
+$('cam').onclick = camStart;
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' ? camStart() : camStop());
+renderColors(); camStart();
+
+})();
+</script></body></html>
